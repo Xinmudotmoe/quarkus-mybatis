@@ -1,5 +1,7 @@
 package io.quarkiverse.mybatis.runtime;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.Reader;
 import java.sql.Connection;
@@ -11,6 +13,7 @@ import java.util.function.Supplier;
 
 import javax.sql.DataSource;
 
+import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.executor.loader.cglib.CglibProxyFactory;
 import org.apache.ibatis.executor.loader.javassist.JavassistProxyFactory;
 import org.apache.ibatis.io.Resources;
@@ -341,6 +344,22 @@ public class MyBatisRecorder {
             reader.close();
         } catch (Exception e) {
             LOG.warn("Error executing SQL Script " + sql, e);
+        }
+    }
+
+    public void registerMapperXmlFiles(RuntimeValue<SqlSessionFactory> sqlSessionFactory, String[] resourceFiles) {
+        Configuration configuration = sqlSessionFactory.getValue().getConfiguration();
+        for (String resourceFile : resourceFiles) {
+            try {
+                InputStream in = Resources.getResourceAsStream(resourceFile);
+                XMLMapperBuilder xmlMapperBuilder = new XMLMapperBuilder(in,
+                        configuration, resourceFile, configuration.getSqlFragments());
+                xmlMapperBuilder.parse();
+            } catch (IOException e) {
+                LOG.info("Ignore  " + e.getClass(), e);
+            } catch (Exception e) {
+                LOG.warn("Register Mappper Xml ");
+            }
         }
     }
 }

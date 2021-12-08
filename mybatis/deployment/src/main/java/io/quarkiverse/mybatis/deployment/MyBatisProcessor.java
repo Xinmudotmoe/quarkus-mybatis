@@ -42,6 +42,7 @@ import io.quarkiverse.mybatis.runtime.MyBatisXMLConfigDelegateBuilder;
 import io.quarkiverse.mybatis.runtime.config.MyBatisDataSourceRuntimeConfig;
 import io.quarkiverse.mybatis.runtime.config.MyBatisRuntimeConfig;
 import io.quarkiverse.mybatis.runtime.meta.MapperDataSource;
+import io.quarkiverse.mybatis.runtime.meta.MapperXmlFile;
 import io.quarkus.agroal.spi.JdbcDataSourceBuildItem;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.deployment.annotations.BuildProducer;
@@ -65,6 +66,7 @@ public class MyBatisProcessor {
     private static final DotName MYBATIS_TYPE_HANDLER = DotName.createSimple(MappedTypes.class.getName());
     private static final DotName MYBATIS_JDBC_TYPE_HANDLER = DotName.createSimple(MappedJdbcTypes.class.getName());
     private static final DotName MYBATIS_MAPPER_DATA_SOURCE = DotName.createSimple(MapperDataSource.class.getName());
+    private static final DotName MYBATIS_MAPPER_XML_FILE = DotName.createSimple(MapperXmlFile.class.getName());
 
     @BuildStep
     FeatureBuildItem feature() {
@@ -101,7 +103,11 @@ public class MyBatisProcessor {
     void addMyBatisMappers(BuildProducer<MyBatisMapperBuildItem> mappers,
             BuildProducer<ReflectiveClassBuildItem> reflective,
             BuildProducer<NativeImageProxyDefinitionBuildItem> proxy,
-            CombinedIndexBuildItem indexBuildItem) {
+            CombinedIndexBuildItem indexBuildItem,
+            BuildProducer<NativeImageResourceBuildItem> resource,
+            BuildProducer<MybatisMapperXmlBuildItem> mybatisMapperXml) {
+        resource.produce(new NativeImageResourceBuildItem("org/apache/ibatis/builder/xml/mybatis-3-config.dtd"));
+        resource.produce(new NativeImageResourceBuildItem("org/apache/ibatis/builder/xml/mybatis-3-mapper.dtd"));
         for (AnnotationInstance i : indexBuildItem.getIndex().getAnnotations(MYBATIS_MAPPER)) {
             if (i.target().kind() == AnnotationTarget.Kind.CLASS) {
                 DotName dotName = i.target().asClass().name();
@@ -118,6 +124,21 @@ public class MyBatisProcessor {
                     mappers.produce(new MyBatisMapperBuildItem(dotName, dataSourceName));
                 } else {
                     mappers.produce(new MyBatisMapperBuildItem(dotName, "<default>"));
+                }
+
+                Optional<AnnotationInstance> mapperXmlFile = i.target().asClass().annotations().entrySet().stream()
+                        .filter(entry -> entry.getKey().equals(MYBATIS_MAPPER_XML_FILE))
+                        .map(Map.Entry::getValue)
+                        .map(annotationList -> annotationList.get(0))
+                        .findFirst();
+                if (mapperXmlFile.isPresent()) {
+                    String[] resourceFiles = mapperXmlFile.get().value().asStringArray();
+                    String dataSourceNameBak = "<default>";
+                    if (mapperDatasource.isPresent()) {
+                        dataSourceNameBak = mapperDatasource.get().value().asString();
+                    }
+                    resource.produce(new NativeImageResourceBuildItem(resourceFiles));
+                    mybatisMapperXml.produce(new MybatisMapperXmlBuildItem(resourceFiles, dataSourceNameBak));
                 }
             }
         }
@@ -356,6 +377,18 @@ public class MyBatisProcessor {
             optionalInitialSql.ifPresent(initialSql -> recorder.runInitialSql(
                     sqlSessionFactoryBuildItem.getSqlSessionFactory(), initialSql));
         });
+    }
+
+    @Record(ExecutionTime.RUNTIME_INIT)
+    @BuildStep
+    void runRegisterMapperXmlFiles(List<SqlSessionFactoryBuildItem> sqlSessionFactoryBuildItems,
+            List<MybatisMapperXmlBuildItem> mybatisMapperXmlBuildItems,
+            MyBatisRecorder recorder) {
+        sqlSessionFactoryBuildItems.forEach(sqlSessionFactoryBuildItem -> mybatisMapperXmlBuildItems.stream()
+                .filter(mybatisMapperXmlBuildItem -> mybatisMapperXmlBuildItem.getDataSourceName()
+                        .equals(sqlSessionFactoryBuildItem.getDataSourceName()))
+                .forEach(mybatisMapperXmlBuildItem -> recorder.registerMapperXmlFiles(
+                        sqlSessionFactoryBuildItem.getSqlSessionFactory(), mybatisMapperXmlBuildItem.getSourcesNames())));
     }
 
     private SqlSessionManagerBuildItem getDefaultSessionManager(List<SqlSessionManagerBuildItem> sqlSessionManagerBuildItems) {
